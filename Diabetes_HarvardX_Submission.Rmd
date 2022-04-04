@@ -1,0 +1,575 @@
+---
+pdf_document:
+  fig_caption: 
+  
+  
+  number_sections: yes
+  toc: yes
+  df_print: kable
+author: "_Kanin Limniyakul_"
+date: "4/4/2022"
+output: pdf_document
+title: "**Diabetes Prediction Project**"
+subtitle: 'HarvardX Data Science Professional Certificate: PH125.9x Capstone 2'
+---
+
+```{r , include=FALSE, cache = TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+tinytex::install_tinytex()
+```
+
+\newpage
+\tableofcontents 
+\listoffigures
+\listoftables
+\newpage
+
+```{r libraies & pakages, eval = TRUE, echo =FALSE, message=FALSE}
+#load required packages
+
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(corrr)
+library(psych)
+library(corrplot)
+library(MASS)
+library(scales)
+library(readr)
+```
+
+```{r read data, echo = FALSE, warning=FALSE,  message=FALSE}
+#read data
+#dataset source : https://www.kaggle.com/mathchi/diabetes-data-set and saved in github repository.
+
+urlfile="https://raw.githubusercontent.com/kanin-limniyakul/Diabetes-ML/main/diabetes.csv"
+
+dat<-read_csv(url(urlfile))
+
+dat$Outcome <- as.factor(dat$Outcome)
+
+```
+# Executive Summary
+
+This is the a part of HarvardX professional certificate in Data Science capstone project. The aim of this project is to find the most accurate classification model on diabetes dataset from all female patients age older than 21 of Pima Indian heritage with 768 rows and 9 columns. 
+
+The analysis of this project started from perform exploratory data analysis (EDA) examining the correlation of each features, check near zero value and then center and scale the data as pre-processing process. Next, the data is partitioned into 80% training set and 20% test set. Then, the various models have been introduced including Logistic Regression, Linear Discriminant Analysis, Quadratic Discriminant Analysis,K-Nearest Neighbor, K-Nearest Neighbor -Cross Validation, Classification Tree, Random Forest and Ensemble Model. 
+
+The analysis is included in each models, hyper-parameters tuning (where applicable) as well as comparing between training and test set. The accuracy on the test set ranging between 0.7 - 0.75 where the Random Forest model yield the best accuracy of 0.75 in prediction.
+
+\newpage
+
+# Exploratory Data Analysis
+
+The dataset comprises of 768 rows with 8 feature columns and 1 outcome column. The description on each features are defined as below,
+
+
+
+```{r structure, echo = FALSE, warning=FALSE}
+
+#Exploratory Data Analysis
+
+str(dat) # Data Structure
+
+# create feature description table
+
+var <- c("Pregnancies","Glucose","BloodPressure","SkinThickness","Insulin","BMI","DiabetesPedigreeFunction","Age","Oucome")
+des <- c("No of times pregnant", "Plasma glucose concentration a 2 hours in an oral glucose tolerance test", "Diastolic blood pressure (mm Hg)","Triceps skin fold thickness (mm)", "2-Hour serum insulin (mu U/ml)","Body mass index (weight in kg/(height in m)^2)", "Diabetes pedigree function","Age (years)","Factor class (0 or 1), 0= no diabetes, 1 =  diabetes ")
+
+descriptive<- data_frame( Name = var, Description = des)
+head <- head(dat,5)
+knitr::kable (descriptive , caption = "Features and Outcomes Descriptions" )
+knitr::kable (head , caption = "The first 5 rows of the dataset" )
+
+```
+\newpage
+
+There are 268 diabetes cases and 500 non diabetes cases.Thus the data is not considered as unbalanced data set.
+
+```{r outcome graph, echo = FALSE, fig.cap = "Outcome Summary"}
+
+#summary outcome to create bar graph
+
+datn<- dat %>% group_by(Outcome) %>% summarize(Cases = n())
+datn<- as.data.frame(datn)
+datn %>% ggplot(aes(x = Outcome, y= Cases, fill = Outcome)) + geom_bar(stat = "identity") +geom_text(aes(label = Cases), nudge_y = 25)
+
+
+```
+
+\newpage
+
+## Heatmap Plot
+
+The heatmap below is generated to quickly to show the correlations between all features and the outcome. From the map it's quite clear that Glucose, Pregnancies and BMI are quite positively correlated to Outcome.
+
+
+```{r heatmap, echo=FALSE, fig.cap = "Heatmap showing correlation between features"}
+
+#create heatmap correlation plot
+
+temp <-dat
+
+temp$Outcome <- as.numeric(temp$Outcome) #temporary convert to numeric for heatmap
+corrplot(cor(temp[1:9]),        # Correlation matrix
+         method = "shade", # Correlation plot method
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         title = "",       # Main title
+         col = NULL)       # Color palette
+```
+
+
+## Features Plot
+
+The box plots (the feature plots) below show the overview of features distribution according to the Outcome. For diabetes cases, the median of BMI DiabetesPedigreeFunction, Age, Pregnancies, Glucose Blood Pressure and SkinThickness are higher than no diabetes cases. The range of each features are quite different, for example, Insulin range from roughly o to 800 whereas Pregnancies range is only 0 - 15. 
+
+
+```{r feature plot, fig.cap = "Features box plots", echo = FALSE}
+
+#create features plot
+
+ featurePlot(x = dat[, 1:8], 
+            y = dat$Outcome, 
+            plot = "box", 
+            ## Pass in options to bwplot() 
+            scales = list(y = list(relation="free"),
+                          x = list(rot = 90)),  
+            layout = c(4,2 ), 
+            auto.key = list(columns = 2))
+
+```
+
+\newpage
+
+## Near Zero Variance Features
+
+The next thing to explore is to check zero and near zero variance which in this data, there is no zero and near zero value as shown below,
+
+```{r check zero var,  echo = FALSE}
+
+#Check near zero variance feature
+
+nzv <- nearZeroVar(dat[,1:8], saveMetrics = TRUE)
+knitr::kable(nzv, caption = "Checking Near Zero Variance Predictors")
+
+```
+
+
+# Pre-Processing data
+
+## Scaling Data
+
+As observed in the previous EDA section, there are a lot of data range variances, so we center the data to be at 0 and scale the data to have the standard deviation as 1 (mean = 0, sd = 1) to improve efficiency and the accuracy of the models.
+
+```{r scaling data, echo = FALSE}
+
+# Pre-Processing data
+
+#standardized data
+
+preProcValues <- preProcess(dat[1:8], method = c("center", "scale"))
+
+
+dat_n <- predict(preProcValues, dat)
+
+norm_dat <- head(dat_n)
+
+knitr::kable(norm_dat, column_spec= (width = "5cm"), caption = " The first six rows of scaled dataset")
+
+
+```
+the features density plots after centered and scaled as shown as below,
+
+```{r scaled, fig.cap = "Scaled features density plot", echo=FALSE}
+
+#density plot after standardized
+
+featurePlot(x = dat_n[, 1:8], 
+            y = dat$Outcome, 
+            plot = "density", 
+            ## Pass in options to densityplot() 
+            scales = list(y = list(relation="free"),
+                          x = list(rot = 90)),  
+            layout = c(4,2 ), 
+            auto.key = list(columns = 2))
+```
+
+\newpage
+
+## Data Partitioning
+
+The data set has been splitted to 80% training set and 20% test set. The summary are shown as below.
+
+```{r, echo = FALSE}
+
+#data partitioning 80% train 20% test
+
+set.seed(2022)
+test_index <- createDataPartition(dat$Outcome, times = 1, p = 0.2, list = FALSE)
+test_set<- dat_n[test_index, ]
+train_set<- dat_n[-test_index, ]
+ntest <- nrow(test_set)
+ntrain <- nrow(train_set)
+partition <- data.frame(Name = c("train", "test"), n = c(ntrain,ntest))
+knitr::kable (partition , caption = "train/test split")
+
+```
+
+# Methodology and Analysis
+
+The methodology is to perform various machine learning algorithms including Logistic regression, Linear Discriminant Analysis(LDA), Quadratic Discriminant Analysis(QDA), K-Nearest Neighbor (KNN), K-Nearest Neighbor -Cross Validation (KNN-CV), Classification Tree and Random Forest to see the results of each model then the ensemble model will be conducted. Finally we will choose the best model to predict our data set. The hyper parameters tuning are also conducted on KNN, Classification Tree and Random-forest Model.
+
+
+## Logistic Regression
+
+Logistic Regression is the first model to train in this data set by using all features as the predictors. 
+Then the insignificant features, namely SkinThickness, Insulin and Age, are removed. The training accuracy is improved from 0.7673724 to 0.7692762. However the test accuracy remains the same at 0.7467532. Note that The training accuracy and test set accuracy are quite close -indicating good fit.
+ 
+
+```{r logistic, echo = FALSE, warning = FALSE}
+
+## Logistic Regression
+
+#train the model
+train_glm_all <- train(Outcome ~ ., method = "glm", data = train_set)
+summary(train_glm_all)
+
+
+#Remove insignificant features
+train_glm_all_update <- train(Outcome ~ .-SkinThickness-Insulin -Age, method = "glm", data = train_set)
+
+#making predictions
+glm_all_preds <- predict(train_glm_all, test_set)
+glm_all_preds_update <- predict(train_glm_all_update, test_set)
+
+#calculate accuracy
+glm_acc <- mean(glm_all_preds == test_set$Outcome) #glm accuracy
+glm_acc_update <- mean(glm_all_preds == test_set$Outcome)
+
+#Table compare train and test accuracy
+result_glm <- data_frame(Method = c("Training Accuracy", "Training Accuracy-Update","Test Accuracy", "Test Accuracy-Update"), Accuracy =     c(train_glm_all$results$Accuracy,train_glm_all_update$results$Accuracy,glm_acc,glm_acc_update))
+knitr::kable(result_glm, caption = "Accuracy Table (Logistic Regression)")
+
+#Confusion Matrix
+confusionMatrix(data = factor(glm_all_preds), reference = factor(test_set$Outcome))
+
+```
+
+## Linear Discriminat Analysis (LDA)
+
+LDA is the second model to train in this data set by using all features as the predictors. The graph below represents the histogram of LDA classifier based on the LDA coefficients. The overlapping between 2 graphs represents that the model could not separate two classes completely- the training accuracy is 0.786645.
+
+```{r, echo = FALSE, fig.cap = "Histrogram of LDA classifier on the train data set"}
+
+## Linear Discriminat Analysis (LDA)
+
+#train the model
+
+model <- lda(Outcome~., data=train_set) 
+plot(model)
+
+train_results <- predict(model, train_set)
+
+lda_train_acc <- mean(train_results$class == train_set$Outcome) #lda train accuracy
+
+```
+The graph below showing the classified test data, class 1 is non-diabetes and class 2 is diabetes with colored by the actual test data. the mixed color(red and black) in each class represents the incorrect classifications. 
+
+```{r,echo = FALSE, fig.cap = "LDA Classification on the test set - colored by the actual outcome from the tes set"}
+
+#prediction
+
+predicted <- predict(model, test_set)
+
+
+#plot LD1 vs outcome
+
+par(mfrow=c(1,1))
+plot(predicted$x[,1], predicted$class, col = test_set$Outcome, xlab = "LD1", ylab = "Predicted Class")
+
+
+
+
+```
+
+The test set accuracy is 0.7402597.
+
+```{r, echo=FALSE}
+#LDA Accuracy calculation
+
+lda_pred_acc <- mean(predicted$class == test_set$Outcome) #lda accuracy
+
+
+#LDA Summary table
+
+result_lda <- data_frame(Method = c("Training Accuracy", "Test Accuracy"), Accuracy = c(lda_train_acc,lda_pred_acc))
+knitr::kable(result_lda, caption = "Accuracy Table (LDA)")
+
+
+confusionMatrix(data = factor(predicted$class), 
+                reference = factor(test_set$Outcome))
+
+
+```
+
+
+## Quadratic Discriminat Analysis (QDA)
+
+QDA is the third model to train in this data set by using all features as the predictors. From the plot showing QDA classification results based on the posterior probability colored by the test data. Observing that the colors are more mixed than LDA plot which indicates poorer accuracy (0.7012987) that LDA method.
+
+```{r, echo =FALSE, fig.cap = "QDA Classification on the test set - colored by the actual outcome from the tes set" }
+
+## Quadratic Discriminat Analysis (QDA)
+
+qmodel <- qda(Outcome~., data=train_set) #train the model
+
+
+qtrain_results <- predict(qmodel, train_set)
+
+qda_train_acc <- mean(qtrain_results$class == train_set$Outcome)#qda train accuracy
+
+qpredicted <- predict(qmodel, test_set)
+
+#plot prob vs predicted class
+
+par(mfrow=c(1,1))
+plot(qpredicted$posterior[,2], qpredicted$class, col = test_set$Outcome, xlab = "Predicted Posterior Probability", ylab = "Predicted Class")
+
+qda_pred_acc <- mean(qpredicted$class == test_set$Outcome) #qda accuracy
+
+#qda summary
+
+result_qda <- data_frame(Method = c("Training Accuracy", "Test Accuracy"), Accuracy = c(qda_train_acc,qda_pred_acc))
+knitr::kable(result_qda, caption = "Accuracy Table (QDA)")
+confusionMatrix(data = factor(qpredicted$class), 
+                reference = factor(test_set$Outcome))
+
+
+```
+
+
+## K-Nearest Neighbor Model(KNN)
+
+Firstly, we estimated the best k parameters for model tuning by vary k from 3 to 51 with the incremental of 2. 
+
+```{r knn, fig.cap =" Accuracy vs k plot", warning = FALSE, echo= FALSE}
+
+## K-Nearest Neighbor Model(KNN)
+
+set.seed(2022)
+train_knn <- train(Outcome ~ .,
+                   method = "knn",
+                   data = train_set,
+                   tuneGrid = data.frame(k = seq(3, 51, 2)))
+
+knitr::kable(train_knn$bestTune, caption = "k best tune")
+
+
+
+plot(train_knn)
+
+
+```
+KNN model's training and test accuracy can be find as below table.
+
+```{r knn predict, echo= FALSE}
+
+#Prediction and Accuracy
+
+knn_preds <- predict(train_knn, test_set) 
+knn_acc <- mean(knn_preds == test_set$Outcome) 
+
+
+#Table compare train and test accuracy
+
+
+result_KNN <- data_frame(Method = c("Training Accuracy","Test Accuracy"), Accuracy = c(train_knn$results$Accuracy[which.max(train_knn$results$Accuracy)],knn_acc))
+knitr::kable(result_KNN, caption = "Accuracy Table Comparison (KNN)")
+confusionMatrix(data = factor(knn_preds), 
+                reference = factor(test_set$Outcome))
+```
+
+## Cross-validated KNN 10-fold, 10%
+
+We will use the cross-validation technique with KNN by setting 10-fold with 10% of the data set, then finding the best k, 
+the accuracy summary is ahown as below table.
+
+```{r cv_knn, echo= FALSE}
+#cross-validated KNN 10-fold, 10%
+
+set.seed(2022)
+
+train_knn_cv <- train(Outcome ~ .,
+                      method = "knn",
+                      data = train_set,
+                      tuneGrid = data.frame(k = seq(3, 51, 2)),
+                      trControl = trainControl(method = "cv", number = 10, p = 0.9))
+knitr::kable(train_knn_cv$bestTune, caption = "k_cv best tune")
+plot(train_knn_cv)
+
+
+```
+
+```{r knn_cv_pred, echo=FALSE}
+#prediction
+
+knn_cv_preds <- predict(train_knn_cv, test_set)
+knn_cv_acc <- mean(knn_cv_preds == test_set$Outcome)
+
+
+#Table compare train and test accuracy
+
+
+result_KNN_cv <- data_frame(Method = c("Training Accuracy","Test Accuracy"), Accuracy = c(train_knn_cv$results$Accuracy[which.max(train_knn_cv$results$Accuracy)],knn_cv_acc))
+knitr::kable(result_KNN_cv, caption = "Accuracy Table Comparison (KNN_Cross Validation)")
+confusionMatrix(data = factor(knn_cv_preds), 
+                reference = factor(test_set$Outcome))
+```
+## Classification Tree Model
+
+Tho model is trained with the complexity parameter(cp) from 0 to 0.06 with an incremental of 0.002, the best cp of 0.022. From the tree model.
+
+```{r, echo=FALSE, fig.cap = "Complexity Parameter Tuning"}
+#Classification Tree Model
+
+set.seed(2022)
+
+train_rpart <- train(Outcome ~ ., 
+                     method = "rpart",
+                     tuneGrid = data.frame(cp = seq(0, 0.06, 0.002)),
+                     data = train_set)
+
+knitr::kable(train_rpart$bestTune, caption = "Best complexity parameter tuning")
+
+plot(train_rpart)
+
+```
+
+
+There are two nodes on glucose level and BMI that classify the outcomes. The accuracy on the test set is 0.7337662.
+
+```{r rpart predict, echo = FALSE, fig.cap ="Classification Tree"}
+
+#plot decision tree
+plot(train_rpart$finalModel, margin = 0.1)
+text(train_rpart$finalModel)
+
+#prediction and accuracy
+rpart_preds <- predict(train_rpart, test_set)
+tree_acc <- mean(rpart_preds == test_set$Outcome)
+tree_acc
+
+#summarize results
+result_CT <- data_frame(Method = c("Training Accuracy","Test Accuracy"), Accuracy = c(train_rpart$results$Accuracy[which.max(train_rpart$results$Accuracy)],tree_acc))
+knitr::kable(result_CT, caption = "Accuracy Table Comparison (Classification Tree)")
+
+confusionMatrix(data = factor(rpart_preds), 
+                reference = factor(test_set$Outcome))
+
+```
+## Random Forest
+
+Random Forest is tuned by 500 number of trees with randomly selected features from 1 to 8.
+
+```{r RF, echo =FALSE, fig.cap = "Tuning Parameter k"}
+#random forest model
+
+set.seed(2002)
+
+train_rf <- train(Outcome ~ .,
+                  data = train_set,
+                  method = "rf",
+                  ntree = 500,
+                  tuneGrid = data.frame(mtry = seq(1:8)))
+
+plot(train_rf)
+
+
+knitr::kable(train_rf$bestTune, caption = "Best mtry RF model")
+
+```
+Glucose and BMI are the most important predictors as shown in below figure.
+
+
+```{r, fig.cap= "Important Variables in RandomForest model", echo =FALSE}
+
+# Important Variables plot
+
+plot(varImp(train_rf))
+```
+The accuracy on the test set is 0.7532468.
+
+```{r rf prediction, echo = FALSE}
+#RF prediction
+
+rf_preds <- predict(train_rf, test_set)
+rf_acc <- mean(rf_preds == test_set$Outcome)
+
+
+#summarize results
+result_rf <- data_frame(Method = c("Training Accuracy","Test Accuracy"), Accuracy = c(train_rf$results$Accuracy[which.max(train_rf$results$Accuracy)],rf_acc))
+knitr::kable(result_rf, caption = "Accuracy Table Comparison (Random Forest)")
+
+confusionMatrix(data = factor(rf_preds), 
+                reference = factor(test_set$Outcome))
+```
+## Ensemble Model
+
+The last step is to ensemble the models by majority vote (>50%) of each outcome.Since each model yields very close  results (the wrong predictions happened almost all models) so the accuracy of the ensemble model is 0.7402597, not much improved from the best model. Random Forest is the most accurate model with 0.7532468 accuracy.
+	
+```{r ensemble, echo = FALSE}
+
+#ensemble model
+
+ensemble <- cbind(logistic = glm_all_preds == 1,  
+                  KNN = knn_preds == 1,  KNN_CV = knn_cv_preds == 1,
+                  Classification_Tree = rpart_preds == 1,
+                  Random_Forest = rf_preds ==1,
+                  LDA = predicted$class  ==1,
+                  QDA = qpredicted$class  ==1)
+
+                 
+ensemble_preds <- ifelse(rowMeans(ensemble) > 0.5, 1, 0)
+
+test_out <- ifelse(test_set$Outcome == 0, 0,1)
+
+
+#ensembel model table
+
+ensemble <- ensemble %>% cbind(ensemble_prediction = ensemble_preds, test_outcome = test_out)
+
+knitr::kable(head(ensemble), caption = "Ensemble Model")
+
+
+
+#calculate accuracy
+
+ensemble_acc<- mean(ensemble_preds == test_set$Outcome)
+
+
+# summary table
+
+summary <- data.frame(Model = c("Logistic Regression", "LDA","QDA","KNN","KNN_CV","Classification Tree", "Random Forest","Ensemble"), Accuracy = c(glm_acc, lda_pred_acc,qda_pred_acc,knn_acc,knn_cv_acc,tree_acc,rf_acc, ensemble_acc)) 
+
+knitr::kable(summary, caption = "Accuracy Table Comparison (All Models)")
+
+```
+\newpage
+
+# Conclusion
+
+From the implemented models, the accuracy (diabetes prediction) can be arranged from high to low as QDA, KNN, KNN_CV, Classification Tree, LDA, Ensemble, Logistic Regression and Random Forest with range 0.7012987 to 0.7532468. Since each model predicts quite in the same way, hence the ensemble model improved for every models except random forest which yield the highest accuracy of 0.75. 
+
+There are many more machine learning algorithms to be explored for future works that can improve the accuracy of the prediction.
+
+# Reference
+
+Dataset Source : https://www.kaggle.com/mathchi/diabetes-data-set
+
+
+
+
